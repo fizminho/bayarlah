@@ -1,7 +1,6 @@
 'use client'
 
 import { useState, useRef } from 'react'
-import { supabase } from '@/lib/supabase'
 import { extractTextFromImage, parseReceiptText, ParsedItem } from '@/lib/ocr'
 import { Loader2, Trash2, Plus, Upload } from 'lucide-react'
 
@@ -97,35 +96,35 @@ export default function Home() {
   async function handleSave() {
     setSaving(true)
     try {
-      let qrImageUrl: string | null = null
+      let qrBase64: string | null = null
+      let qrMimeType: string | null = null
+      let qrExt: string | null = null
+
       if (qrFile) {
-        const ext = qrFile.name.split('.').pop()
-        const fileName = `qr_${Date.now()}.${ext}`
-        const { error: uploadError } = await supabase.storage.from('qr-images').upload(fileName, qrFile, { upsert: true })
-        if (!uploadError) {
-          const { data } = supabase.storage.from('qr-images').getPublicUrl(fileName)
-          qrImageUrl = data.publicUrl
-        }
+        qrBase64 = await new Promise<string>((resolve, reject) => {
+          const reader = new FileReader()
+          reader.onload = () => resolve((reader.result as string).split(',')[1])
+          reader.onerror = reject
+          reader.readAsDataURL(qrFile)
+        })
+        qrMimeType = qrFile.type
+        qrExt = qrFile.name.split('.').pop() ?? 'png'
       }
 
-      const { data: receipt, error: receiptError } = await supabase
-        .from('receipts')
-        .insert({ title: receiptTitle, subtotal, tax, total, qr_image_url: qrImageUrl })
-        .select().single()
+      const res = await fetch('/api/receipt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ title: receiptTitle, subtotal, tax, total, qrBase64, qrMimeType, qrExt, items }),
+      })
 
-      if (receiptError || !receipt) throw receiptError
+      if (!res.ok) throw new Error('Failed to save receipt')
+      const { id } = await res.json()
 
-      const itemRows = items
-        .filter(i => i.item_name.trim())
-        .map(i => ({ receipt_id: receipt.id, item_name: i.item_name, quantity: i.quantity, price: i.price }))
-
-      if (itemRows.length) await supabase.from('receipt_items').insert(itemRows)
-
-      setShareLink(`${window.location.origin}/r/${receipt.id}`)
+      setShareLink(`${window.location.origin}/r/${id}`)
       setStep('share')
     } catch (err) {
       console.error(err)
-      alert('Failed to save receipt. Check your Supabase config.')
+      alert('Failed to save receipt. Check your config.')
     } finally {
       setSaving(false)
     }
